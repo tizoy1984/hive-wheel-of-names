@@ -28,34 +28,46 @@ io.on('connection', (socket) => {
             return;
         }
 
-        console.log(`🎁 Escrow complete! Paying ${winners.length} winners for host: ${hostName}`);
+        console.log(`🎁 Escrow complete! Preparing to pay ${winners.length} winners for host: ${hostName}`);
         
-        // Loop through and automatically pay every winner from the cbrs bank
+        // 1. Create an empty array to hold all of our bundled transactions
+        const operations = [];
+        
+        // 2. Loop through the winners and build the operations
         for (const winner of winners) {
             if (winner.prize <= 0) continue;
-            try {
-                // Ensure the prize string is formatted perfectly for Hive ("0.000 HIVE")
-                const amountFormatted = parseFloat(winner.prize).toFixed(3) + " HIVE";
-                
-                await client.broadcast.transfer({ 
+            
+            const amountFormatted = parseFloat(winner.prize).toFixed(3) + " HIVE";
+            
+            // Push the transfer operation into our bundle
+            operations.push([
+                'transfer',
+                {
                     from: ACCOUNT_NAME, 
                     to: winner.name, 
                     amount: amountFormatted, 
                     memo: `🎉 You won the Hive Wheel Giveaway hosted by @${hostName}!` 
-                }, ACTIVE_KEY);
-                
-                console.log(`✅ Wheel Payout Success: ${amountFormatted} sent to ${winner.name}`);
-            } catch (err) { 
-                console.error(`❌ Wheel Payout Failed for ${winner.name}:`, err.message); 
-            }
+                }
+            ]);
         }
-        
-        // Alert the frontend that the server finished its job
-        socket.emit('wheel_payout_result', { success: true });
-    });
 
-    socket.on('disconnect', () => {
-        console.log(`🔌 Disconnected: ${socket.id}`);
+        // Safety check just in case there are no valid prizes
+        if (operations.length === 0) {
+            socket.emit('wheel_payout_result', { success: true });
+            return;
+        }
+
+        // 3. Broadcast the entire bundle in ONE single transaction!
+        try {
+            await client.broadcast.sendOperations(operations, ACTIVE_KEY);
+            console.log(`✅ SUCCESS: Bulk payout of ${operations.length} transfers completed at once!`);
+            
+            // Alert the frontend that the server finished its job
+            socket.emit('wheel_payout_result', { success: true });
+        } catch (err) { 
+            console.error(`❌ Bulk Payout Failed:`, err.message); 
+            socket.emit('wheel_payout_result', { success: false, message: "Blockchain rejected the transfer." });
+        }
     });
 });
 
