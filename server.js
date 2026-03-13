@@ -20,7 +20,8 @@ io.on('connection', (socket) => {
 
     // --- WHEEL OF NAMES AUTOMATIC PAYOUTS ---
     socket.on('process_wheel_payouts', async (data) => {
-        const { hostName, winners } = data; 
+        // NEW: We are now extracting the 'token' variable sent from the frontend!
+        const { hostName, winners, token = 'HIVE' } = data; 
         
         if (!ACTIVE_KEY) {
             console.log("❌ Wheel Payout Error: cbrs Active Key not set.");
@@ -28,27 +29,53 @@ io.on('connection', (socket) => {
             return;
         }
 
-        console.log(`🎁 Escrow complete! Preparing to pay ${winners.length} winners for host: ${hostName}`);
+        console.log(`🎁 Escrow complete! Preparing to pay ${winners.length} winners (${token}) for host: ${hostName}`);
         
         // 1. Create an empty array to hold all of our bundled transactions
         const operations = [];
         
-        // 2. Loop through the winners and build the operations
+        // 2. Loop through the winners and build the operations based on token type
         for (const winner of winners) {
             if (winner.prize <= 0) continue;
             
-            const amountFormatted = parseFloat(winner.prize).toFixed(3) + " HIVE";
+            const quantityFormatted = parseFloat(winner.prize).toFixed(3);
+            const memoMessage = `🎉 You won the Hive Wheel Giveaway hosted by @${hostName}!`;
             
-            // Push the transfer operation into our bundle
-            operations.push([
-                'transfer',
-                {
-                    from: ACCOUNT_NAME, 
-                    to: winner.name, 
-                    amount: amountFormatted, 
-                    memo: `🎉 You won the Hive Wheel Giveaway hosted by @${hostName}!` 
-                }
-            ]);
+            if (token === 'HIVE') {
+                // NATIVE HIVE TRANSFER
+                operations.push([
+                    'transfer',
+                    {
+                        from: ACCOUNT_NAME, 
+                        to: winner.name, 
+                        amount: `${quantityFormatted} HIVE`, 
+                        memo: memoMessage
+                    }
+                ]);
+            } else {
+                // HIVE ENGINE TRANSFER (DEC, SPS, etc.)
+                // Hive engine requires a Custom JSON operation using your Active Key
+                const transferJson = JSON.stringify({
+                    contractName: "tokens",
+                    contractAction: "transfer",
+                    contractPayload: {
+                        symbol: token,
+                        to: winner.name,
+                        quantity: quantityFormatted,
+                        memo: memoMessage
+                    }
+                });
+
+                operations.push([
+                    'custom_json',
+                    {
+                        required_auths: [ACCOUNT_NAME], // Active Key required for transferring tokens
+                        required_posting_auths: [],
+                        id: 'ssc-mainnet-hive', // The universal Hive Engine network ID
+                        json: transferJson
+                    }
+                ]);
+            }
         }
 
         // Safety check just in case there are no valid prizes
@@ -60,7 +87,7 @@ io.on('connection', (socket) => {
         // 3. Broadcast the entire bundle in ONE single transaction!
         try {
             await client.broadcast.sendOperations(operations, ACTIVE_KEY);
-            console.log(`✅ SUCCESS: Bulk payout of ${operations.length} transfers completed at once!`);
+            console.log(`✅ SUCCESS: Bulk payout of ${operations.length} ${token} transfers completed at once!`);
             
             // Alert the frontend that the server finished its job
             socket.emit('wheel_payout_result', { success: true });
@@ -71,7 +98,6 @@ io.on('connection', (socket) => {
     });
 });
 
-// I set this to 3001 so it doesn't conflict with your Hivecade server (3000) if you test locally!
 const PORT = process.env.PORT || 3001; 
 server.listen(PORT, () => {
     console.log(`🚀 Hive Wheel Giveaway Server running on port ${PORT}`);
